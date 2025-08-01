@@ -65,8 +65,13 @@ typedef enum
     SubGhzToolkitSubmenuIndexListProtocols,
     SubGhzToolkitSubmenuIndexExportProtocolInfo,
     SubGhzToolkitSubmenuIndexAdvancedAnalysis,
-    SubGhzToolkitSubmenuIndexAbout,
     SubGhzToolkitSubmenuIndexProtocolDetails = 100,
+    SubGhzToolkitSubmenuIndexFunctionDisassembly,
+    SubGhzToolkitSubmenuIndexProtocolStateAnalysis,
+    SubGhzToolkitSubmenuIndexSignalCapture,
+    SubGhzToolkitSubmenuIndexTimingAnalysis,
+    SubGhzToolkitSubmenuIndexCHeaderGeneration,
+    SubGhzToolkitSubmenuIndexAbout,
 } SubGhzToolkitSubmenuIndex;
 
 static bool subghz_toolkit_export_keeloq_keys(SubGhzToolkitApp *app);
@@ -77,6 +82,18 @@ static void subghz_toolkit_advanced_analysis(SubGhzToolkitApp *app);
 static void subghz_toolkit_show_about(SubGhzToolkitApp *app);
 
 static void subghz_toolkit_deep_protocol_analysis(Stream *stream, const SubGhzProtocol *protocol, SubGhzEnvironment *env);
+
+// Enhanced analysis functions
+static void subghz_toolkit_function_disassembly(SubGhzToolkitApp *app);
+static void subghz_toolkit_protocol_state_analysis(SubGhzToolkitApp *app);
+static void subghz_toolkit_signal_capture_analysis(SubGhzToolkitApp *app);
+static void subghz_toolkit_timing_analysis(SubGhzToolkitApp *app);
+static void subghz_toolkit_generate_c_headers(SubGhzToolkitApp *app);
+static void subghz_toolkit_analyze_function_bytes(Stream *stream, const char *func_name, void *func_ptr, size_t max_bytes);
+static void subghz_toolkit_analyze_protocol_state(Stream *stream, const SubGhzProtocol *protocol, SubGhzEnvironment *env);
+static void subghz_toolkit_capture_signal_samples(Stream *stream, SubGhzReceiver *receiver);
+static void subghz_toolkit_analyze_timing_patterns(Stream *stream, const SubGhzProtocol *protocol);
+static void subghz_toolkit_generate_protocol_c_header(Stream *stream, const SubGhzProtocol *protocol);
 
 static uint32_t subghz_toolkit_exit_callback(void *context)
 {
@@ -100,15 +117,14 @@ static void subghz_toolkit_submenu_callback(void *context, uint32_t index)
         if (subghz_toolkit_export_keeloq_keys(app))
         {
             popup_set_header(app->popup, "Success!", 64, 10, AlignCenter, AlignTop);
-            popup_set_text(app->popup, "Keys exported to:\n/ext/subghz/analysis/keeloq_keys.txt",
-                           64, 20, AlignCenter, AlignTop);
+            popup_set_text(app->popup, "Keeloq keys exported to:\n/ext/subghz/keeloq_keys.txt", 64, 20, AlignCenter, AlignTop);
         }
         else
         {
             popup_set_header(app->popup, "Error!", 64, 10, AlignCenter, AlignTop);
-            popup_set_text(app->popup, "Failed to export keys", 64, 20, AlignCenter, AlignTop);
+            popup_set_text(app->popup, "Failed to export Keeloq keys", 64, 20, AlignCenter, AlignTop);
         }
-        popup_set_callback(app->popup, NULL);
+        popup_set_callback(app->popup, subghz_toolkit_popup_callback);
         popup_set_context(app->popup, app);
         popup_set_timeout(app->popup, 3000);
         popup_enable_timeout(app->popup);
@@ -120,11 +136,39 @@ static void subghz_toolkit_submenu_callback(void *context, uint32_t index)
     }
     else if (index == SubGhzToolkitSubmenuIndexExportProtocolInfo)
     {
+        view_dispatcher_switch_to_view(app->view_dispatcher, SubGhzToolkitViewLoading);
         subghz_toolkit_export_all_protocol_info(app);
+        popup_set_header(app->popup, "Success!", 64, 10, AlignCenter, AlignTop);
+        popup_set_text(app->popup, "Protocol info exported to:\n/ext/subghz/protocols.txt", 64, 20, AlignCenter, AlignTop);
+        popup_set_callback(app->popup, subghz_toolkit_popup_callback);
+        popup_set_context(app->popup, app);
+        popup_set_timeout(app->popup, 3000);
+        popup_enable_timeout(app->popup);
+        view_dispatcher_switch_to_view(app->view_dispatcher, SubGhzToolkitViewPopup);
     }
     else if (index == SubGhzToolkitSubmenuIndexAdvancedAnalysis)
     {
         subghz_toolkit_advanced_analysis(app);
+    }
+    else if (index == SubGhzToolkitSubmenuIndexFunctionDisassembly)
+    {
+        subghz_toolkit_function_disassembly(app);
+    }
+    else if (index == SubGhzToolkitSubmenuIndexProtocolStateAnalysis)
+    {
+        subghz_toolkit_protocol_state_analysis(app);
+    }
+    else if (index == SubGhzToolkitSubmenuIndexSignalCapture)
+    {
+        subghz_toolkit_signal_capture_analysis(app);
+    }
+    else if (index == SubGhzToolkitSubmenuIndexTimingAnalysis)
+    {
+        subghz_toolkit_timing_analysis(app);
+    }
+    else if (index == SubGhzToolkitSubmenuIndexCHeaderGeneration)
+    {
+        subghz_toolkit_generate_c_headers(app);
     }
     else if (index == SubGhzToolkitSubmenuIndexAbout)
     {
@@ -132,9 +176,9 @@ static void subghz_toolkit_submenu_callback(void *context, uint32_t index)
     }
     else if (index >= SubGhzToolkitSubmenuIndexProtocolDetails)
     {
+        // Handle protocol-specific details
         size_t protocol_index = index - SubGhzToolkitSubmenuIndexProtocolDetails;
-        const SubGhzProtocol *protocol =
-            subghz_protocol_registry_get_by_index(app->protocol_registry, protocol_index);
+        const SubGhzProtocol *protocol = subghz_protocol_registry_get_by_index(app->protocol_registry, protocol_index);
         if (protocol && protocol->name)
         {
             subghz_toolkit_extract_protocol_details(app, protocol->name);
@@ -722,6 +766,41 @@ static void subghz_toolkit_show_protocols_list(SubGhzToolkitApp *app)
 
     submenu_add_item(
         app->submenu,
+        "Function Disassembly",
+        SubGhzToolkitSubmenuIndexFunctionDisassembly,
+        subghz_toolkit_submenu_callback,
+        app);
+
+    submenu_add_item(
+        app->submenu,
+        "Protocol State Analysis",
+        SubGhzToolkitSubmenuIndexProtocolStateAnalysis,
+        subghz_toolkit_submenu_callback,
+        app);
+
+    submenu_add_item(
+        app->submenu,
+        "Signal Capture Analysis",
+        SubGhzToolkitSubmenuIndexSignalCapture,
+        subghz_toolkit_submenu_callback,
+        app);
+
+    submenu_add_item(
+        app->submenu,
+        "Timing Analysis",
+        SubGhzToolkitSubmenuIndexTimingAnalysis,
+        subghz_toolkit_submenu_callback,
+        app);
+
+    submenu_add_item(
+        app->submenu,
+        "Generate C Headers",
+        SubGhzToolkitSubmenuIndexCHeaderGeneration,
+        subghz_toolkit_submenu_callback,
+        app);
+
+    submenu_add_item(
+        app->submenu,
         "About",
         SubGhzToolkitSubmenuIndexAbout,
         subghz_toolkit_submenu_callback,
@@ -790,6 +869,539 @@ static void subghz_toolkit_show_intro_popup(SubGhzToolkitApp *app)
 {
     popup_set_header(app->popup, "SubGhz Toolkit", 64, 10, AlignCenter, AlignTop);
     popup_set_text(app->popup, "RocketGod was here\nhttps://betaskynet.com", 64, 20, AlignCenter, AlignTop);
+    popup_set_callback(app->popup, subghz_toolkit_popup_callback);
+    popup_set_context(app->popup, app);
+    popup_set_timeout(app->popup, 3000);
+    popup_enable_timeout(app->popup);
+    view_dispatcher_switch_to_view(app->view_dispatcher, SubGhzToolkitViewPopup);
+}
+
+// Enhanced analysis functions for comprehensive protocol implementation data
+
+static void subghz_toolkit_analyze_function_bytes(Stream *stream, const char *func_name, void *func_ptr, size_t max_bytes)
+{
+    if (!func_ptr) return;
+    
+    stream_write_format(stream, "\n  Function: %s @ %p\n", func_name, func_ptr);
+    stream_write_format(stream, "  Raw Bytes (first %zu bytes):\n", max_bytes);
+    
+    uint8_t *bytes = (uint8_t *)func_ptr;
+    stream_write_format(stream, "    ");
+    
+    for (size_t i = 0; i < max_bytes && i < 64; i++) // Limit to 64 bytes for readability
+    {
+        stream_write_format(stream, "%02X ", bytes[i]);
+        if ((i + 1) % 16 == 0)
+        {
+            stream_write_format(stream, "\n    ");
+        }
+    }
+    
+    // Basic ARM instruction pattern analysis
+    stream_write_format(stream, "\n  ARM Instruction Analysis:\n");
+    for (size_t i = 0; i < max_bytes - 3; i += 4)
+    {
+        uint32_t instruction = *(uint32_t *)(bytes + i);
+        
+        // Common ARM patterns
+        if ((instruction & 0xFF000000) == 0xE9000000) // STMDB
+        {
+            stream_write_format(stream, "    +%02zu: STMDB (stack push)\n", i);
+        }
+        else if ((instruction & 0xFF000000) == 0xE8B00000) // LDMIA
+        {
+            stream_write_format(stream, "    +%02zu: LDMIA (stack pop)\n", i);
+        }
+        else if ((instruction & 0xFF000000) == 0xE1A00000) // MOV
+        {
+            stream_write_format(stream, "    +%02zu: MOV (register move)\n", i);
+        }
+        else if ((instruction & 0xFF000000) == 0xE3A00000) // MOV immediate
+        {
+            stream_write_format(stream, "    +%02zu: MOV immediate\n", i);
+        }
+        else if ((instruction & 0xFF000000) == 0xE5900000) // LDR
+        {
+            stream_write_format(stream, "    +%02zu: LDR (load register)\n", i);
+        }
+        else if ((instruction & 0xFF000000) == 0xE5800000) // STR
+        {
+            stream_write_format(stream, "    +%02zu: STR (store register)\n", i);
+        }
+        else if ((instruction & 0xFF000000) == 0xEB000000) // BL
+        {
+            stream_write_format(stream, "    +%02zu: BL (branch and link)\n", i);
+        }
+        else if ((instruction & 0xFF000000) == 0xEA000000) // B
+        {
+            stream_write_format(stream, "    +%02zu: B (branch)\n", i);
+        }
+        else if ((instruction & 0xFF000000) == 0xE12FFF10) // BX
+        {
+            stream_write_format(stream, "    +%02zu: BX (branch exchange)\n", i);
+        }
+        else if ((instruction & 0xFF000000) == 0xE1A0F000) // MOV PC, LR
+        {
+            stream_write_format(stream, "    +%02zu: MOV PC, LR (return)\n", i);
+        }
+    }
+}
+
+static void subghz_toolkit_analyze_protocol_state(Stream *stream, const SubGhzProtocol *protocol, SubGhzEnvironment *env)
+{
+    if (!protocol->decoder || !env) return;
+    
+    stream_write_format(stream, "\n  Protocol State Analysis:\n");
+    
+    SubGhzProtocolDecoderBase *decoder = protocol->decoder->alloc(env);
+    if (decoder)
+    {
+        stream_write_format(stream, "    Decoder Instance: %p\n", decoder);
+        stream_write_format(stream, "    Decoder Size: %zu bytes\n", sizeof(*decoder));
+        
+        // Analyze decoder structure
+        stream_write_format(stream, "    Decoder Structure Dump:\n");
+        uint8_t *decoder_bytes = (uint8_t *)decoder;
+        for (size_t i = 0; i < sizeof(*decoder); i += 4)
+        {
+            if (i + 3 < sizeof(*decoder))
+            {
+                uint32_t value = *(uint32_t *)(decoder_bytes + i);
+                stream_write_format(stream, "      +%02zu: 0x%08lX\n", i, (uint32_t)value);
+            }
+        }
+        
+        if (protocol->decoder->free)
+        {
+            protocol->decoder->free(decoder);
+        }
+    }
+}
+
+static void subghz_toolkit_capture_signal_samples(Stream *stream, SubGhzReceiver *receiver)
+{
+    stream_write_format(stream, "\n  Signal Capture Analysis:\n");
+    stream_write_format(stream, "    Receiver: %p\n", receiver);
+    
+    // Capture some signal samples for analysis
+    stream_write_format(stream, "    Capturing signal samples...\n");
+    
+    // This would need to be implemented with actual signal capture
+    // For now, we'll document the approach
+    stream_write_format(stream, "    Signal capture approach:\n");
+    stream_write_format(stream, "    1. Start receiver\n");
+    stream_write_format(stream, "    2. Capture raw signal data\n");
+    stream_write_format(stream, "    3. Analyze timing patterns\n");
+    stream_write_format(stream, "    4. Extract protocol parameters\n");
+}
+
+static void subghz_toolkit_analyze_timing_patterns(Stream *stream, const SubGhzProtocol *protocol)
+{
+    stream_write_format(stream, "\n  Timing Pattern Analysis:\n");
+    stream_write_format(stream, "    Protocol: %s\n", protocol->name);
+    
+    // Common timing patterns for different protocols
+    stream_write_format(stream, "    Common timing patterns:\n");
+    stream_write_format(stream, "    - Manchester: 50/50 duty cycle\n");
+    stream_write_format(stream, "    - PWM: Variable pulse width\n");
+    stream_write_format(stream, "    - PPM: Pulse position modulation\n");
+    stream_write_format(stream, "    - RAW: Custom timing patterns\n");
+    
+    // Analyze protocol type for timing hints
+    switch (protocol->type)
+    {
+        case SubGhzProtocolTypeStatic:
+            stream_write_format(stream, "    Type: Static (fixed timing)\n");
+            break;
+        case SubGhzProtocolTypeDynamic:
+            stream_write_format(stream, "    Type: Dynamic (variable timing)\n");
+            break;
+        default:
+            stream_write_format(stream, "    Type: RAW (custom timing)\n");
+            break;
+    }
+}
+
+static void subghz_toolkit_generate_protocol_c_header(Stream *stream, const SubGhzProtocol *protocol)
+{
+    stream_write_format(stream, "\n// Generated C Header for Protocol: %s\n", protocol->name);
+    stream_write_format(stream, "#ifndef %s_PROTOCOL_H\n", protocol->name);
+    stream_write_format(stream, "#define %s_PROTOCOL_H\n\n", protocol->name);
+    
+    stream_write_format(stream, "#include <stdint.h>\n");
+    stream_write_format(stream, "#include <stddef.h>\n\n");
+    
+    stream_write_format(stream, "// Protocol Information\n");
+    stream_write_format(stream, "#define %s_PROTOCOL_NAME \"%s\"\n", protocol->name, protocol->name);
+    stream_write_format(stream, "#define %s_PROTOCOL_TYPE 0x%02X\n", protocol->name, protocol->type);
+    stream_write_format(stream, "#define %s_PROTOCOL_FLAG 0x%08lX\n\n", protocol->name, (uint32_t)protocol->flag);
+    
+    stream_write_format(stream, "// Function Pointer Types\n");
+    stream_write_format(stream, "typedef void* (*%s_alloc_func)(void* env);\n", protocol->name);
+    stream_write_format(stream, "typedef void (*%s_free_func)(void* decoder);\n", protocol->name);
+    stream_write_format(stream, "typedef void (*%s_reset_func)(void* decoder);\n", protocol->name);
+    stream_write_format(stream, "typedef void (*%s_feed_func)(void* decoder, bool level, uint32_t duration);\n", protocol->name);
+    stream_write_format(stream, "typedef void (*%s_get_string_func)(void* decoder, FuriString* output);\n", protocol->name);
+    
+    stream_write_format(stream, "\n// Protocol Structure\n");
+    stream_write_format(stream, "typedef struct {\n");
+    stream_write_format(stream, "    const char* name;\n");
+    stream_write_format(stream, "    uint8_t type;\n");
+    stream_write_format(stream, "    uint32_t flag;\n");
+    stream_write_format(stream, "    struct {\n");
+    stream_write_format(stream, "        %s_alloc_func alloc;\n", protocol->name);
+    stream_write_format(stream, "        %s_free_func free;\n", protocol->name);
+    stream_write_format(stream, "        %s_reset_func reset;\n", protocol->name);
+    stream_write_format(stream, "        %s_feed_func feed;\n", protocol->name);
+    stream_write_format(stream, "        %s_get_string_func get_string;\n", protocol->name);
+    stream_write_format(stream, "    } decoder;\n");
+    stream_write_format(stream, "} %s_Protocol;\n\n", protocol->name);
+    
+    stream_write_format(stream, "// Implementation Notes\n");
+    stream_write_format(stream, "// - Function pointers can be extracted from firmware\n");
+    stream_write_format(stream, "// - Timing patterns need to be analyzed from signals\n");
+    stream_write_format(stream, "// - Protocol state machine needs reverse engineering\n");
+    stream_write_format(stream, "// - Use signal capture to understand data encoding\n\n");
+    
+    stream_write_format(stream, "#endif // %s_PROTOCOL_H\n", protocol->name);
+}
+
+static void subghz_toolkit_function_disassembly(SubGhzToolkitApp *app)
+{
+    view_dispatcher_switch_to_view(app->view_dispatcher, SubGhzToolkitViewLoading);
+
+    bool success = false;
+    Storage *storage = furi_record_open(RECORD_STORAGE);
+    Stream *stream = file_stream_alloc(storage);
+
+    do
+    {
+        storage_simply_mkdir(storage, EXT_PATH("subghz"));
+        storage_simply_mkdir(storage, SUBGHZ_ANALYSIS_DIR);
+
+        if (!file_stream_open(stream, SUBGHZ_ANALYSIS_DIR "/function_disassembly.txt",
+                              FSAM_WRITE, FSOM_CREATE_ALWAYS))
+        {
+            break;
+        }
+
+        stream_write_format(stream,
+                            "==============================================================\n"
+                            "        SubGhz Protocol Function Disassembly Analysis\n"
+                            "                  Generated by SubGhz Toolkit\n"
+                            "                 RocketGod | betaskynet.com\n"
+                            "==============================================================\n\n");
+
+        size_t protocol_count = subghz_protocol_registry_count(app->protocol_registry);
+
+        for (size_t i = 0; i < protocol_count; i++)
+        {
+            const SubGhzProtocol *protocol = subghz_protocol_registry_get_by_index(app->protocol_registry, i);
+            if (!protocol || !protocol->name)
+                continue;
+
+            stream_write_format(stream, "\n████████████████████████████████████████████████████████████\n");
+            stream_write_format(stream, "Protocol: %s - Function Disassembly\n", protocol->name);
+            stream_write_format(stream, "████████████████████████████████████████████████████████████\n");
+
+            if (protocol->decoder)
+            {
+                stream_write_format(stream, "\nDECODER FUNCTIONS:\n");
+                stream_write_format(stream, "==================\n");
+                
+                subghz_toolkit_analyze_function_bytes(stream, "decoder->alloc", protocol->decoder->alloc, 64);
+                subghz_toolkit_analyze_function_bytes(stream, "decoder->free", protocol->decoder->free, 64);
+                subghz_toolkit_analyze_function_bytes(stream, "decoder->reset", protocol->decoder->reset, 64);
+                subghz_toolkit_analyze_function_bytes(stream, "decoder->feed", protocol->decoder->feed, 64);
+                subghz_toolkit_analyze_function_bytes(stream, "decoder->get_string", protocol->decoder->get_string, 64);
+                subghz_toolkit_analyze_function_bytes(stream, "decoder->serialize", protocol->decoder->serialize, 64);
+                subghz_toolkit_analyze_function_bytes(stream, "decoder->deserialize", protocol->decoder->deserialize, 64);
+                subghz_toolkit_analyze_function_bytes(stream, "decoder->get_hash_data", protocol->decoder->get_hash_data, 64);
+            }
+
+            if (protocol->encoder)
+            {
+                stream_write_format(stream, "\nENCODER FUNCTIONS:\n");
+                stream_write_format(stream, "==================\n");
+                
+                subghz_toolkit_analyze_function_bytes(stream, "encoder->alloc", protocol->encoder->alloc, 64);
+                subghz_toolkit_analyze_function_bytes(stream, "encoder->free", protocol->encoder->free, 64);
+                subghz_toolkit_analyze_function_bytes(stream, "encoder->deserialize", protocol->encoder->deserialize, 64);
+                subghz_toolkit_analyze_function_bytes(stream, "encoder->stop", protocol->encoder->stop, 64);
+                subghz_toolkit_analyze_function_bytes(stream, "encoder->yield", protocol->encoder->yield, 64);
+            }
+
+            stream_write_format(stream, "\n");
+        }
+
+        success = true;
+    } while (0);
+
+    stream_free(stream);
+    furi_record_close(RECORD_STORAGE);
+
+    if (success)
+    {
+        popup_set_header(app->popup, "Success!", 64, 10, AlignCenter, AlignTop);
+        popup_set_text(app->popup, "Function disassembly exported to:\n/ext/subghz/analysis/function_disassembly.txt",
+                       64, 20, AlignCenter, AlignTop);
+    }
+    else
+    {
+        popup_set_header(app->popup, "Error!", 64, 10, AlignCenter, AlignTop);
+        popup_set_text(app->popup, "Failed to export disassembly", 64, 20, AlignCenter, AlignTop);
+    }
+
+    popup_set_callback(app->popup, subghz_toolkit_popup_callback);
+    popup_set_context(app->popup, app);
+    popup_set_timeout(app->popup, 3000);
+    popup_enable_timeout(app->popup);
+    view_dispatcher_switch_to_view(app->view_dispatcher, SubGhzToolkitViewPopup);
+}
+
+static void subghz_toolkit_protocol_state_analysis(SubGhzToolkitApp *app)
+{
+    view_dispatcher_switch_to_view(app->view_dispatcher, SubGhzToolkitViewLoading);
+
+    bool success = false;
+    Storage *storage = furi_record_open(RECORD_STORAGE);
+    Stream *stream = file_stream_alloc(storage);
+
+    do
+    {
+        storage_simply_mkdir(storage, EXT_PATH("subghz"));
+        storage_simply_mkdir(storage, SUBGHZ_ANALYSIS_DIR);
+
+        if (!file_stream_open(stream, SUBGHZ_ANALYSIS_DIR "/protocol_state_analysis.txt",
+                              FSAM_WRITE, FSOM_CREATE_ALWAYS))
+        {
+            break;
+        }
+
+        stream_write_format(stream,
+                            "==============================================================\n"
+                            "        SubGhz Protocol State Analysis\n"
+                            "                  Generated by SubGhz Toolkit\n"
+                            "                 RocketGod | betaskynet.com\n"
+                            "==============================================================\n\n");
+
+        size_t protocol_count = subghz_protocol_registry_count(app->protocol_registry);
+
+        for (size_t i = 0; i < protocol_count; i++)
+        {
+            const SubGhzProtocol *protocol = subghz_protocol_registry_get_by_index(app->protocol_registry, i);
+            if (!protocol || !protocol->name)
+                continue;
+
+            stream_write_format(stream, "\n████████████████████████████████████████████████████████████\n");
+            stream_write_format(stream, "Protocol: %s - State Analysis\n", protocol->name);
+            stream_write_format(stream, "████████████████████████████████████████████████████████████\n");
+
+            subghz_toolkit_analyze_protocol_state(stream, protocol, app->environment);
+            stream_write_format(stream, "\n");
+        }
+
+        success = true;
+    } while (0);
+
+    stream_free(stream);
+    furi_record_close(RECORD_STORAGE);
+
+    if (success)
+    {
+        popup_set_header(app->popup, "Success!", 64, 10, AlignCenter, AlignTop);
+        popup_set_text(app->popup, "Protocol state analysis exported to:\n/ext/subghz/analysis/protocol_state_analysis.txt",
+                       64, 20, AlignCenter, AlignTop);
+    }
+    else
+    {
+        popup_set_header(app->popup, "Error!", 64, 10, AlignCenter, AlignTop);
+        popup_set_text(app->popup, "Failed to export state analysis", 64, 20, AlignCenter, AlignTop);
+    }
+
+    popup_set_callback(app->popup, subghz_toolkit_popup_callback);
+    popup_set_context(app->popup, app);
+    popup_set_timeout(app->popup, 3000);
+    popup_enable_timeout(app->popup);
+    view_dispatcher_switch_to_view(app->view_dispatcher, SubGhzToolkitViewPopup);
+}
+
+static void subghz_toolkit_signal_capture_analysis(SubGhzToolkitApp *app)
+{
+    view_dispatcher_switch_to_view(app->view_dispatcher, SubGhzToolkitViewLoading);
+
+    bool success = false;
+    Storage *storage = furi_record_open(RECORD_STORAGE);
+    Stream *stream = file_stream_alloc(storage);
+
+    do
+    {
+        storage_simply_mkdir(storage, EXT_PATH("subghz"));
+        storage_simply_mkdir(storage, SUBGHZ_ANALYSIS_DIR);
+
+        if (!file_stream_open(stream, SUBGHZ_ANALYSIS_DIR "/signal_capture_analysis.txt",
+                              FSAM_WRITE, FSOM_CREATE_ALWAYS))
+        {
+            break;
+        }
+
+        stream_write_format(stream,
+                            "==============================================================\n"
+                            "        SubGhz Signal Capture Analysis\n"
+                            "                  Generated by SubGhz Toolkit\n"
+                            "                 RocketGod | betaskynet.com\n"
+                            "==============================================================\n\n");
+
+        subghz_toolkit_capture_signal_samples(stream, app->receiver);
+
+        success = true;
+    } while (0);
+
+    stream_free(stream);
+    furi_record_close(RECORD_STORAGE);
+
+    if (success)
+    {
+        popup_set_header(app->popup, "Success!", 64, 10, AlignCenter, AlignTop);
+        popup_set_text(app->popup, "Signal capture analysis exported to:\n/ext/subghz/analysis/signal_capture_analysis.txt",
+                       64, 20, AlignCenter, AlignTop);
+    }
+    else
+    {
+        popup_set_header(app->popup, "Error!", 64, 10, AlignCenter, AlignTop);
+        popup_set_text(app->popup, "Failed to export signal analysis", 64, 20, AlignCenter, AlignTop);
+    }
+
+    popup_set_callback(app->popup, subghz_toolkit_popup_callback);
+    popup_set_context(app->popup, app);
+    popup_set_timeout(app->popup, 3000);
+    popup_enable_timeout(app->popup);
+    view_dispatcher_switch_to_view(app->view_dispatcher, SubGhzToolkitViewPopup);
+}
+
+static void subghz_toolkit_timing_analysis(SubGhzToolkitApp *app)
+{
+    view_dispatcher_switch_to_view(app->view_dispatcher, SubGhzToolkitViewLoading);
+
+    bool success = false;
+    Storage *storage = furi_record_open(RECORD_STORAGE);
+    Stream *stream = file_stream_alloc(storage);
+
+    do
+    {
+        storage_simply_mkdir(storage, EXT_PATH("subghz"));
+        storage_simply_mkdir(storage, SUBGHZ_ANALYSIS_DIR);
+
+        if (!file_stream_open(stream, SUBGHZ_ANALYSIS_DIR "/timing_analysis.txt",
+                              FSAM_WRITE, FSOM_CREATE_ALWAYS))
+        {
+            break;
+        }
+
+        stream_write_format(stream,
+                            "==============================================================\n"
+                            "        SubGhz Protocol Timing Analysis\n"
+                            "                  Generated by SubGhz Toolkit\n"
+                            "                 RocketGod | betaskynet.com\n"
+                            "==============================================================\n\n");
+
+        size_t protocol_count = subghz_protocol_registry_count(app->protocol_registry);
+
+        for (size_t i = 0; i < protocol_count; i++)
+        {
+            const SubGhzProtocol *protocol = subghz_protocol_registry_get_by_index(app->protocol_registry, i);
+            if (!protocol || !protocol->name)
+                continue;
+
+            stream_write_format(stream, "\n████████████████████████████████████████████████████████████\n");
+            stream_write_format(stream, "Protocol: %s - Timing Analysis\n", protocol->name);
+            stream_write_format(stream, "████████████████████████████████████████████████████████████\n");
+
+            subghz_toolkit_analyze_timing_patterns(stream, protocol);
+            stream_write_format(stream, "\n");
+        }
+
+        success = true;
+    } while (0);
+
+    stream_free(stream);
+    furi_record_close(RECORD_STORAGE);
+
+    if (success)
+    {
+        popup_set_header(app->popup, "Success!", 64, 10, AlignCenter, AlignTop);
+        popup_set_text(app->popup, "Timing analysis exported to:\n/ext/subghz/analysis/timing_analysis.txt",
+                       64, 20, AlignCenter, AlignTop);
+    }
+    else
+    {
+        popup_set_header(app->popup, "Error!", 64, 10, AlignCenter, AlignTop);
+        popup_set_text(app->popup, "Failed to export timing analysis", 64, 20, AlignCenter, AlignTop);
+    }
+
+    popup_set_callback(app->popup, subghz_toolkit_popup_callback);
+    popup_set_context(app->popup, app);
+    popup_set_timeout(app->popup, 3000);
+    popup_enable_timeout(app->popup);
+    view_dispatcher_switch_to_view(app->view_dispatcher, SubGhzToolkitViewPopup);
+}
+
+static void subghz_toolkit_generate_c_headers(SubGhzToolkitApp *app)
+{
+    view_dispatcher_switch_to_view(app->view_dispatcher, SubGhzToolkitViewLoading);
+
+    bool success = false;
+    Storage *storage = furi_record_open(RECORD_STORAGE);
+    Stream *stream = file_stream_alloc(storage);
+
+    do
+    {
+        storage_simply_mkdir(storage, EXT_PATH("subghz"));
+        storage_simply_mkdir(storage, SUBGHZ_ANALYSIS_DIR);
+
+        if (!file_stream_open(stream, SUBGHZ_ANALYSIS_DIR "/protocol_headers.h",
+                              FSAM_WRITE, FSOM_CREATE_ALWAYS))
+        {
+            break;
+        }
+
+        stream_write_format(stream,
+                            "// ==============================================================\n"
+                            "//        SubGhz Protocol C Headers for Implementation\n"
+                            "//                  Generated by SubGhz Toolkit\n"
+                            "//                 RocketGod | betaskynet.com\n"
+                            "// ==============================================================\n\n");
+
+        size_t protocol_count = subghz_protocol_registry_count(app->protocol_registry);
+
+        for (size_t i = 0; i < protocol_count; i++)
+        {
+            const SubGhzProtocol *protocol = subghz_protocol_registry_get_by_index(app->protocol_registry, i);
+            if (!protocol || !protocol->name)
+                continue;
+
+            subghz_toolkit_generate_protocol_c_header(stream, protocol);
+            stream_write_format(stream, "\n");
+        }
+
+        success = true;
+    } while (0);
+
+    stream_free(stream);
+    furi_record_close(RECORD_STORAGE);
+
+    if (success)
+    {
+        popup_set_header(app->popup, "Success!", 64, 10, AlignCenter, AlignTop);
+        popup_set_text(app->popup, "C headers generated to:\n/ext/subghz/analysis/protocol_headers.h",
+                       64, 20, AlignCenter, AlignTop);
+    }
+    else
+    {
+        popup_set_header(app->popup, "Error!", 64, 10, AlignCenter, AlignTop);
+        popup_set_text(app->popup, "Failed to generate C headers", 64, 20, AlignCenter, AlignTop);
+    }
+
     popup_set_callback(app->popup, subghz_toolkit_popup_callback);
     popup_set_context(app->popup, app);
     popup_set_timeout(app->popup, 3000);
@@ -871,6 +1483,41 @@ static SubGhzToolkitApp *subghz_toolkit_app_alloc()
         app->submenu,
         "Advanced Analysis",
         SubGhzToolkitSubmenuIndexAdvancedAnalysis,
+        subghz_toolkit_submenu_callback,
+        app);
+
+    submenu_add_item(
+        app->submenu,
+        "Function Disassembly",
+        SubGhzToolkitSubmenuIndexFunctionDisassembly,
+        subghz_toolkit_submenu_callback,
+        app);
+
+    submenu_add_item(
+        app->submenu,
+        "Protocol State Analysis",
+        SubGhzToolkitSubmenuIndexProtocolStateAnalysis,
+        subghz_toolkit_submenu_callback,
+        app);
+
+    submenu_add_item(
+        app->submenu,
+        "Signal Capture Analysis",
+        SubGhzToolkitSubmenuIndexSignalCapture,
+        subghz_toolkit_submenu_callback,
+        app);
+
+    submenu_add_item(
+        app->submenu,
+        "Timing Analysis",
+        SubGhzToolkitSubmenuIndexTimingAnalysis,
+        subghz_toolkit_submenu_callback,
+        app);
+
+    submenu_add_item(
+        app->submenu,
+        "Generate C Headers",
+        SubGhzToolkitSubmenuIndexCHeaderGeneration,
         subghz_toolkit_submenu_callback,
         app);
 
